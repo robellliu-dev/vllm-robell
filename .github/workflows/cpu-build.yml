@@ -46,8 +46,8 @@ jobs:
 
       - name: Install CPU build dependencies
         run: |
-          uv pip install -r requirements/cpu-build.txt --index-strategy unsafe-best-match
-          uv pip install -r requirements/cpu.txt --index-strategy unsafe-best-match
+          uv pip install -r requirements/cpu-build.txt --index-strategy unsafe-best-match --extra-index-url https://download.pytorch.org/whl/cpu
+          uv pip install -r requirements/cpu.txt --index-strategy unsafe-best-match --extra-index-url https://download.pytorch.org/whl/cpu
 
       - name: Build and install vLLM (CPU)
         env:
