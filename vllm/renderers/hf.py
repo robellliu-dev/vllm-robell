@@ -449,6 +449,15 @@ def safe_apply_chat_template(
     tokenize: bool = True,
     **kwargs,
 ) -> str | list[int]:
+    def _apply_chat_template(template_kwargs: dict[str, Any]) -> str | list[int]:
+        return tokenizer.apply_chat_template(
+            conversation=conversation,  # type: ignore[arg-type]
+            tools=tools,  # type: ignore[arg-type]
+            chat_template=chat_template,
+            tokenize=tokenize,
+            **template_kwargs,
+        )
+
     chat_template = resolve_chat_template(
         tokenizer,
         chat_template=chat_template,
@@ -469,16 +478,31 @@ def safe_apply_chat_template(
     )
 
     try:
-        return tokenizer.apply_chat_template(
-            conversation=conversation,  # type: ignore[arg-type]
-            tools=tools,  # type: ignore[arg-type]
-            chat_template=chat_template,
-            tokenize=tokenize,
-            **resolved_kwargs,
-        )
+        return _apply_chat_template(resolved_kwargs)
     # External library exceptions can sometimes occur despite the framework's
     # internal exception management capabilities.
     except Exception as e:
+        # Some templates (for example Qwen3.5) reject add_generation_prompt=True
+        # when no user message exists. Retry once without generation prompt.
+        if (
+            kwargs.get("add_generation_prompt") is True
+            and kwargs.get("continue_final_message") is not True
+            and isinstance(e, jinja2.exceptions.TemplateError)
+            and str(e) == "No user query found in messages."
+        ):
+            logger.warning_once(
+                "Retrying chat template rendering with "
+                "`add_generation_prompt=False` because the template rejected "
+                "the request with no user query."
+            )
+            fallback_kwargs = dict(resolved_kwargs)
+            fallback_kwargs["add_generation_prompt"] = False
+
+            try:
+                return _apply_chat_template(fallback_kwargs)
+            except Exception as fallback_e:
+                e = fallback_e
+
         # Log and report any library-related exceptions for further
         # investigation.
         logger.exception(

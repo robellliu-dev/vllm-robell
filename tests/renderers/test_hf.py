@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 import pytest
+from jinja2.exceptions import TemplateError
 
 from vllm.config import ModelConfig
 from vllm.entrypoints.chat_utils import load_chat_template
@@ -535,3 +536,51 @@ def test_get_gen_prompt(
         f"The generated prompt does not match the expected output for "
         f"model {model} and template {template}"
     )
+
+
+def test_safe_apply_chat_template_retries_no_user_query_template_error():
+
+    class MockTokenizer:
+        def __init__(self):
+            self.calls: list[bool] = []
+
+        def apply_chat_template(self, conversation, add_generation_prompt=False,
+                                **kwargs):
+            self.calls.append(add_generation_prompt)
+            if add_generation_prompt:
+                raise TemplateError("No user query found in messages.")
+            return "rendered"
+
+    tokenizer = MockTokenizer()
+
+    result = safe_apply_chat_template(
+        model_config=None,  # type: ignore[arg-type]
+        tokenizer=tokenizer,  # type: ignore[arg-type]
+        conversation=[{"role": "assistant", "content": "prefill"}],
+        chat_template="{{ messages }}",
+        add_generation_prompt=True,
+        continue_final_message=False,
+        tokenize=False,
+    )
+
+    assert result == "rendered"
+    assert tokenizer.calls == [True, False]
+
+
+def test_safe_apply_chat_template_does_not_retry_other_template_errors():
+
+    class MockTokenizer:
+        def apply_chat_template(self, conversation, add_generation_prompt=False,
+                                **kwargs):
+            raise TemplateError("Something else failed.")
+
+    with pytest.raises(ValueError, match="Something else failed."):
+        safe_apply_chat_template(
+            model_config=None,  # type: ignore[arg-type]
+            tokenizer=MockTokenizer(),  # type: ignore[arg-type]
+            conversation=[{"role": "assistant", "content": "prefill"}],
+            chat_template="{{ messages }}",
+            add_generation_prompt=True,
+            continue_final_message=False,
+            tokenize=False,
+        )
