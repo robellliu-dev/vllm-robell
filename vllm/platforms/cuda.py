@@ -436,6 +436,18 @@ class CudaPlatformBase(Platform):
             return backend
 
         cc = cls.get_device_capability()
+        # ViT Triton attention can hang on some pre-Ampere GPUs during
+        # multimodal encoder profiling. Keep the default backend conservative
+        # there and fall back to PyTorch SDPA unless the user explicitly
+        # overrides the backend.
+        if cc is not None and cc < DeviceCapability(8, 0):
+            logger.info_once(
+                "Using backend %s for vit attention on compute capability %s.",
+                AttentionBackendEnum.TORCH_SDPA,
+                cc.as_version_str(),
+            )
+            return AttentionBackendEnum.TORCH_SDPA
+
         for vit_attn_backend in cls.get_supported_vit_attn_backends():
             if vit_attn_backend == AttentionBackendEnum.TORCH_SDPA:
                 continue

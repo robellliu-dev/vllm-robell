@@ -19,6 +19,7 @@ from vllm.model_executor.layers.attention import MMEncoderAttention
 from vllm.platforms import current_platform
 from vllm.platforms.cpu import CpuPlatform
 from vllm.platforms.cuda import CudaPlatform
+from vllm.platforms.interface import DeviceCapability
 from vllm.platforms.rocm import RocmPlatform
 from vllm.utils.torch_utils import set_default_torch_dtype, set_random_seed
 from vllm.v1.attention.backends.registry import AttentionBackendEnum
@@ -82,6 +83,32 @@ def test_mha_attn_platform(default_vllm_config, device: str):
         ):
             attn = MMEncoderAttention(16, 72, scale=1)
             assert attn.attn_backend == AttentionBackendEnum.TRITON_ATTN
+
+
+def test_vit_backend_falls_back_to_sdpa_on_pre_ampere():
+    with patch.object(
+        CudaPlatform,
+        "get_device_capability",
+        return_value=DeviceCapability(7, 0),
+    ):
+        backend = CudaPlatform.get_vit_attn_backend(
+            head_size=64, dtype=torch.float16
+        )
+    assert backend == AttentionBackendEnum.TORCH_SDPA
+
+
+def test_vit_backend_override_is_honored_on_pre_ampere():
+    with patch.object(
+        CudaPlatform,
+        "get_device_capability",
+        return_value=DeviceCapability(7, 0),
+    ):
+        backend = CudaPlatform.get_vit_attn_backend(
+            head_size=64,
+            dtype=torch.float16,
+            backend=AttentionBackendEnum.TRITON_ATTN,
+        )
+    assert backend == AttentionBackendEnum.TRITON_ATTN
 
 
 def ref_attention(
