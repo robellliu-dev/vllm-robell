@@ -500,9 +500,17 @@ _MULTIMODAL_MODELS = {
         "qwen3_5",
         "Qwen3_5ForConditionalGeneration",
     ),
+    "Qwen3_5ForCausalLM": (
+        "qwen3_5",
+        "Qwen3_5ForCausalLM",
+    ),
     "Qwen3_5MoeForConditionalGeneration": (
         "qwen3_5",
         "Qwen3_5MoeForConditionalGeneration",
+    ),
+    "Qwen3_5MoeForCausalLM": (
+        "qwen3_5",
+        "Qwen3_5MoeForCausalLM",
     ),
     "SkyworkR1VChatModel": ("skyworkr1v", "SkyworkR1VChatModel"),
     "Step3VLForConditionalGeneration": ("step3_vl", "Step3VLForConditionalGeneration"),  # noqa: E501

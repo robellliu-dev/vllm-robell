@@ -1022,7 +1022,15 @@ _MULTIMODAL_EXAMPLE_MODELS = {
         "Qwen/Qwen3.5-0.8B",
         max_model_len=4096,
     ),
+    "Qwen3_5ForCausalLM": _HfExamplesInfo(
+        "Qwen/Qwen3.5-0.8B",
+        max_model_len=4096,
+    ),
     "Qwen3_5MoeForConditionalGeneration": _HfExamplesInfo(
+        "Qwen/Qwen3.5-35B-A3B",
+        max_model_len=4096,
+    ),
+    "Qwen3_5MoeForCausalLM": _HfExamplesInfo(
         "Qwen/Qwen3.5-35B-A3B",
         max_model_len=4096,
     ),
