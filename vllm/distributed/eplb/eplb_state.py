@@ -377,16 +377,53 @@ class EplbState:
         self.validate_ep_configuration(model)
         self.is_async = self.parallel_config.eplb_config.use_async
 
-        physical_to_logical_map_list = (
-            EplbState.build_initial_global_physical_to_logical_map(
-                model.num_routed_experts,
-                model.num_redundant_experts,
+        # Check if initial layout file is provided
+        initial_layout_file = self.parallel_config.eplb_config.initial_layout_file
+        if initial_layout_file is not None:
+            logger.info("Loading initial expert layout from %s", initial_layout_file)
+            import json
+            import os
+
+            # Load from file based on extension
+            ext = os.path.splitext(initial_layout_file)[1].lower()
+            if ext == ".npy":
+                # Load from numpy file
+                import numpy as np
+
+                physical_to_logical_map_np = np.load(initial_layout_file)
+            elif ext == ".json":
+                # Load from JSON file
+                with open(initial_layout_file) as f:
+                    physical_to_logical_map_list = json.load(f)
+                physical_to_logical_map_np = np.array(physical_to_logical_map_list)
+            else:
+                raise ValueError(
+                    f"Unsupported initial layout file format: {ext}. "
+                    "Only .npy and .json are supported."
+                )
+
+            # Validate the loaded layout
+            assert physical_to_logical_map_np.shape == (model.num_physical_experts,), (
+                f"Initial layout shape mismatch: expected "
+                f"({model.num_physical_experts},), got "
+                f"{physical_to_logical_map_np.shape}"
             )
-        )
-        physical_to_logical_map = torch.tensor(
-            physical_to_logical_map_list,
-            device=self.device,
-        )
+
+            physical_to_logical_map = torch.from_numpy(physical_to_logical_map_np).to(
+                self.device
+            )
+        else:
+            # Use default round-robin initialization
+            physical_to_logical_map_list = (
+                EplbState.build_initial_global_physical_to_logical_map(
+                    model.num_routed_experts,
+                    model.num_redundant_experts,
+                )
+            )
+            physical_to_logical_map = torch.tensor(
+                physical_to_logical_map_list,
+                device=self.device,
+            )
         # Assuming 8 GPUs per node, this supports up to
         # (1023 + 1) / 8 = 128 nodes for now.
         # TODO(rui): make this configurable

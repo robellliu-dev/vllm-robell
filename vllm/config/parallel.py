@@ -35,7 +35,7 @@ logger = init_logger(__name__)
 ExpertPlacementStrategy = Literal["linear", "round_robin"]
 DistributedExecutorBackend = Literal["ray", "mp", "uni", "external_launcher"]
 DataParallelBackend = Literal["ray", "mp"]
-EPLBPolicyOption = Literal["default"]
+EPLBPolicyOption = Literal["default", "omni"]
 All2AllBackend = Literal[
     "naive",
     "pplx",
@@ -80,6 +80,12 @@ class EPLBConfig:
 
     policy: EPLBPolicyOption = "default"
     """The policy type for expert parallel load balancing (EPLB)."""
+
+    initial_layout_file: str | None = None
+    """Path to the initial expert layout file (npy or JSON format).
+    If provided, EPLB will use this layout instead of the default
+    round-robin initialization.
+    """
 
     @model_validator(mode="after")
     def _validate_eplb_config(self) -> Self:

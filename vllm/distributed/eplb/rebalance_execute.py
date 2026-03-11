@@ -248,13 +248,22 @@ def move_to_buffer(
                 for w, b in zip(expert_weights, expert_weights_buffers):
                     b[dst].copy_(w[src_local], non_blocking=True)
 
-    p2p_ops: list[P2POp] = []
-
     # Pre-compute global ranks mapping
     ep_size = ep_group.size()
     rank_to_global = {rank: get_global_rank(ep_group, rank) for rank in range(ep_size)}
 
-    # 2. Post sends
+    # Get topology information: assume 8 GPUs per node (this could be made configurable)
+    gpus_per_node = 8
+
+    # Function to determine if two ranks are on the same node
+    def same_node(rank1: int, rank2: int) -> bool:
+        return rank1 // gpus_per_node == rank2 // gpus_per_node
+
+    # Collect send and receive operations with topology information
+    send_ops = []
+    recv_ops = []
+
+    # 2. Collect send operations
     if send_count > 0:
         experts = send_expert_ids[:send_count]
         srcs = send_src_rows[:send_count]
@@ -285,16 +294,23 @@ def move_to_buffer(
                 recv_ranks.append(ranks_to_recv[recver_pos])
             for dst in recv_ranks:
                 dst_global = rank_to_global[dst]
-                p2p_ops += [
-                    P2POp(
-                        torch.distributed.isend,
-                        w[src],
-                        dst_global,
+                on_same_node = same_node(ep_rank, dst)
+                send_ops.append(
+                    (
+                        on_same_node,
+                        dst,
+                        [
+                            P2POp(
+                                torch.distributed.isend,
+                                w[src],
+                                dst_global,
+                            )
+                            for w in expert_weights
+                        ],
                     )
-                    for w in expert_weights
-                ]
+                )
 
-    # 3. Post recvs
+    # 3. Collect receive operations
     if recv_count > 0:
         experts = recv_expert_ids[:recv_count]
         dsts = recv_dst_rows[:recv_count]
@@ -322,23 +338,55 @@ def move_to_buffer(
             else:
                 src = ranks_to_send[recver_pos - remainder_start]
             src_global = rank_to_global[src]
-            p2p_ops += [
-                P2POp(
-                    torch.distributed.irecv,
-                    b[dst],
-                    src_global,
+            on_same_node = same_node(ep_rank, src)
+            recv_ops.append(
+                (
+                    on_same_node,
+                    src,
+                    [
+                        P2POp(
+                            torch.distributed.irecv,
+                            b[dst],
+                            src_global,
+                        )
+                        for b in expert_weights_buffers
+                    ],
                 )
-                for b in expert_weights_buffers
-            ]
+            )
 
-    # 4. Execute the P2P operations. The real communication happens here.
-    if p2p_ops and cuda_stream is not None:
+    # 4. Topology-aware instruction reordering
+    # Execute same-node operations first to minimize cross-node contention
+    # Then execute cross-node operations
+    all_ops = []
+
+    # First add same-node send operations
+    same_node_sends = [ops for same, _, ops in send_ops if same]
+    for ops in same_node_sends:
+        all_ops.extend(ops)
+
+    # Then add same-node receive operations
+    same_node_recvs = [ops for same, _, ops in recv_ops if same]
+    for ops in same_node_recvs:
+        all_ops.extend(ops)
+
+    # Then add cross-node send operations
+    cross_node_sends = [ops for same, _, ops in send_ops if not same]
+    for ops in cross_node_sends:
+        all_ops.extend(ops)
+
+    # Finally add cross-node receive operations
+    cross_node_recvs = [ops for same, _, ops in recv_ops if not same]
+    for ops in cross_node_recvs:
+        all_ops.extend(ops)
+
+    # 5. Execute the P2P operations. The real communication happens here.
+    if all_ops and cuda_stream is not None:
         with torch.cuda.stream(cuda_stream):
-            reqs = batch_isend_irecv(p2p_ops)
+            reqs = batch_isend_irecv(all_ops)
             for req in reqs:
                 req.wait()
-    elif p2p_ops:
-        reqs = batch_isend_irecv(p2p_ops)
+    elif all_ops:
+        reqs = batch_isend_irecv(all_ops)
         for req in reqs:
             req.wait()
     # wait for the communication to finish
