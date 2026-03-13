@@ -1,0 +1,100 @@
+name: CPU Build
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/cpu-build.yml'
+      - 'requirements/**'
+      - 'setup.py'
+      - 'pyproject.toml'
+      - 'CMakeLists.txt'
+      - 'vllm/**'
+      - 'csrc/**'
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/cpu-build.yml'
+      - 'requirements/**'
+      - 'setup.py'
+      - 'pyproject.toml'
+      - 'CMakeLists.txt'
+      - 'vllm/**'
+      - 'csrc/**'
+  workflow_dispatch:
+
+jobs:
+  build-cpu:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v6.0.1
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            requirements/**/*.txt
+            pyproject.toml
+          python-version: '3.12'
+
+      - name: Create virtual environment
+        run: |
+          uv venv
+          echo "$GITHUB_WORKSPACE/.venv/bin" >> "$GITHUB_PATH"
+
+      - name: Install CPU build dependencies
+        run: |
+          uv pip install -r requirements/cpu-build.txt --index-strategy unsafe-best-match --extra-index-url https://download.pytorch.org/whl/cpu
+          uv pip install -r requirements/cpu.txt --index-strategy unsafe-best-match --extra-index-url https://download.pytorch.org/whl/cpu
+
+      - name: Build and install vLLM (CPU)
+        env:
+          CMAKE_BUILD_PARALLEL_LEVEL: '4'
+          VLLM_TARGET_DEVICE: cpu
+        run: |
+          uv pip install -e . --no-build-isolation
+
+      - name: Smoke test import
+        run: python -c "import vllm; print(vllm.__version__)"
+
+      - name: Smoke test vllm serve (CPU)
+        env:
+          VLLM_TARGET_DEVICE: cpu
+        run: |
+          set -euo pipefail
+
+          # Start server in background and ensure cleanup on exit.
+          vllm serve Qwen/Qwen3-0.6B \
+            --max-model-len=2K \
+            --load-format=dummy \
+            --hf-overrides '{"num_hidden_layers": 2}' \
+            --enforce-eager \
+            --port 8000 &
+
+          SERVER_PID=$!
+          trap 'kill "$SERVER_PID" 2>/dev/null || true' EXIT
+
+          # Wait for server health endpoint.
+          for i in {1..45}; do
+            if curl -fsS http://localhost:8000/health > /dev/null; then
+              echo "Server started successfully"
+              break
+            fi
+            if [ "$i" -eq 45 ]; then
+              echo "Server failed to start within timeout"
+              exit 1
+            fi
+            sleep 2
+          done
+
+          # Verify API endpoints.
+          curl -fsS http://localhost:8000/health
+          curl -fsS http://localhost:8000/v1/completions \
+            -H "Content-Type: application/json" \
+            -d '{
+              "model": "Qwen/Qwen3-0.6B",
+              "prompt": "Hello",
+              "max_tokens": 5
+            }'
